@@ -5,7 +5,7 @@ print('haha')
 class car:
     def __int__(self, color, model):
         self.color = color
-        selfmodel = model
+        self.model = model
     
     def mymodel(self):
         print(f'car model is {self.model}')
