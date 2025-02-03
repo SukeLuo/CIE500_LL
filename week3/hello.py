@@ -3,7 +3,7 @@ print('This is Linyue')
 print('haha')
 
 class car:
-    def __int__(self, color, model):
+    def __init__(self, color, model):
         self.color = color
         self.model = model
     
