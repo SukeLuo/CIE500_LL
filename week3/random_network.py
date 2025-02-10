@@ -7,25 +7,25 @@ import numpy as np
 
 # In the following script we are going to generate a random graph
 
-## First, we generate 8 random nodes in the horizontal space (0,2) and vertical space (0,3)
-random.seed(66)
-pos = [(random.random() * 2.0, random.random() * 3.0) for _ in range(8)]
+## First, we generate 12 random nodes in the horizontal space (0,3) and vertical space (0,3)
+random.seed(46)
+pos = {i:(random.random() * 3.0, random.random() * 3.0) for i in range(12)}
 
 ## Second, we create an edge list by a given probability.
 edge_list = []
-for node_pair in combinations(list(range(8)), 2):
+for node_pair in combinations(list(range(12)), 2):
     exist_prob = random.random()
-    if exist_prob > 0.7:
+    if exist_prob > 0.5:
         edge_list.append(node_pair)
     else:
         continue
 
 ## Now, we can create the graph based on the positions and edge list.
 
-G = nx.from_edgelist(edge_list, create_using=nx.Graph)
+G = nx.from_edgelist(edge_list, create_using=nx.DiGraph)
 fig, ax = plt.subplots()
-nx.draw_networkx(G, pos=pos, with_labels=True, ax=ax)
-plt.tight_layout()
+nx.draw_networkx(G, pos=pos, with_labels=True, ax=ax, node_color='green', node_size = 5)
+# plt.tight_layout()
 ax.set_aspect("equal")  # set the equal scale of horizontal and vertical
 ax.axis("off")  # remove the frame of the generated figure
 plt.savefig(
@@ -53,15 +53,14 @@ def bmatrix(
     return "\n".join(rv)
 
 
-A = nx.adjacency_matrix(G).toarray()
+A = nx.adjacency_matrix(G, nodelist=list(G.nodes())).toarray()
 
 print(f"The latex version of adjacency matrix is \n {bmatrix(A)}")
 
 
 # Now let's add a self-loop to the network
 
-G.add_edge(4, 4)
-G.add_edge(2, 2)
+G.add_edge(7, 7)
 
 
 fig, ax = plt.subplots()
@@ -80,3 +79,5 @@ plt.savefig(
 print(f"The adjancency matrix of G is \n {nx.adjacency_matrix(G).toarray()}")
 
 print(f"The edge list of G is \n {nx.to_edgelist(G)}")
+
+# %%
