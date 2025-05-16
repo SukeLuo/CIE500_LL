@@ -1,3 +1,6 @@
+'''''
+Author: Linyue Luo
+'''''
 #%%
 import wntr
 import torch
@@ -6,13 +9,10 @@ import torch.nn as nn
 from torch_geometric.nn import GCNConv, NNConv
 import torch.nn.functional as F
 from torch_geometric.data import Data
-from torch_geometric.utils import to_networkx
 import networkx as nx
 import matplotlib.pyplot as plt
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.preprocessing import RobustScaler
 
 inp_file = "/Users/sukeluo/Documents/UB/Courses/25Spring/CIE500/CIE500_LL/week7/Net3.inp"
 wn = wntr.network.WaterNetworkModel(inp_file)
@@ -31,7 +31,7 @@ nodes = list(wn.node_name_list)
 node_mapping = {name: idx for idx, name in enumerate(nodes)}
 inv_node_mapping = {idx: name for name, idx in node_mapping.items()}
 
-# Filter to only include pipes (exclude pumps, valves, etc.)
+# Filter to only include pipes (exclude pumps, valves)
 pipes = [name for name, link in wn.links() if link.link_type == 'Pipe']
 pipe_mapping = {name: idx for idx, name in enumerate(pipes)}
 inv_pipe_mapping = {idx: name for name, idx in pipe_mapping.items()}
@@ -39,7 +39,6 @@ inv_pipe_mapping = {idx: name for name, idx in pipe_mapping.items()}
 print(f"Total links in network: {len(wn.link_name_list)}")
 print(f"Number of pipes (excluding pumps/valves): {len(pipes)}")
 
-# First collect all roughness values
 roughness_label = []
 for idx, (link_name, link) in enumerate(wn.links()):
     if link.link_type == 'Pipe':
@@ -48,8 +47,6 @@ for idx, (link_name, link) in enumerate(wn.links()):
 print("\nOriginal roughness values:")
 print(f"First 5 values: {roughness_label[:5]}")
 print(f"Last 5 values: {roughness_label[-5:]}")
-
-# Now modify the roughness values for known pipes
 
 # Modify roughness values for known pipes to create more variance
 modified_roughness = roughness_label.copy()
@@ -64,22 +61,6 @@ for idx, coeff in enumerate(modified_roughness):
             modified_roughness[idx] = np.random.uniform(130, 150)  # Middle range
         else:  # 30% chance to be higher range
             modified_roughness[idx] = np.random.uniform(150, 180)  # Higher range
-
-print("\nModified roughness values:")
-print(f"First 5 values: {modified_roughness[:5]}")
-print(f"Last 5 values: {modified_roughness[-5:]}")
-
-print("\nRoughness distribution before modification:")
-print(f"Min: {min(roughness_label):.2f}")
-print(f"Max: {max(roughness_label):.2f}")
-print(f"Mean: {np.mean(roughness_label):.2f}")
-print(f"Std: {np.std(roughness_label):.2f}")
-
-print("\nRoughness distribution after modification:")
-print(f"Min: {min(modified_roughness):.2f}")
-print(f"Max: {max(modified_roughness):.2f}")
-print(f"Mean: {np.mean(modified_roughness):.2f}")
-print(f"Std: {np.std(modified_roughness):.2f}")
 
 # Use modified roughness for known pipes
 roughness_label = modified_roughness
@@ -108,11 +89,9 @@ for idx, (link_name, link) in enumerate(wn.links()):
         # Append edge attributes
         edge_attrs.append([length, diameter, flowrate, headloss])
 
-#%%
-# Convert edge attributes to a PyTorch tensor (shape = [num_edges, num_edge_features])
 edge_attr = torch.tensor(np.array(edge_attrs), dtype=torch.float)
-
-# Add elevation,demand as node features
+#%%
+# Add elevation, demand (base demand) as node features
 elevations = []
 demands = []
 for node in nodes:
@@ -131,23 +110,21 @@ for node in nodes:
         # a Reservoir node typically does not store its head as a direct numeric attribute (node_obj.head)
         ele = node_obj.head_timeseries.base_value
     else:
-        ele = 0  # or some default
+        ele = 0  # or other default
         dem = 0.0
 
     # print(node, node_obj.node_type, ele)  # Debug print if there is any "None" value
     elevations.append(ele)
     demands.append(dem)
 #%%
-# Convert to a PyTorch tensor
 elevation_tensor = torch.tensor(elevations, dtype=torch.float).view(-1, 1) # Shape: (num_nodes, 1)
 demand_tensor = torch.tensor(demands, dtype=torch.float).view(-1, 1)
 node_features = torch.cat([elevation_tensor, demand_tensor], dim=1)
 
-# Make edge attr into node fea, while node fea into edge attr in data object
-
 # Convert edge list to a PyTorch tensor (shape = [2, num_edges])
 edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous() # Original edge index
 
+# Make edge attr into node fea, while node fea into edge attr in data object
 # Create new edge_index for pipe connections
 pipe_edges = []
 for i, (src, dst) in enumerate(edges):
@@ -167,6 +144,7 @@ pipe_edge_index = torch.tensor(pipe_edges, dtype=torch.long).t().contiguous()
 print("\nEdge index shapes:")
 print(f"Original edge_index shape: {edge_index.shape}")
 print(f"New pipe_edge_index shape: {pipe_edge_index.shape}")
+
 # Find both ends node features of each edge(which is new edge_attr)
 edge_node_features = []
 for i in pipe_edge_index[0]:
@@ -194,14 +172,12 @@ dst_feats = node_features[dst_nodes] # same shape
 # Concatenate: [src_features || dst_features]
 # edge_node_features = torch.cat([src_feats, dst_feats], dim=1) # shape: [num_edges, 2*num_node_features]
 
-# Data validation checks
 print(f"Number of pipes (nodes in GNN): {len(pipes)}")
 print(f"Number of pipe connections (edges in GNN): {edge_index.shape[1]}")
 print(f"Pipe feature shape (node features in GNN): {edge_attr.shape}")
 print(f"Pipe connection feature shape (edge features in GNN): {edge_node_features.shape}")
 print(f"Roughness label shape: {edge_attr.shape}")
 
-# Create data object
 print("\nData dimensions check:")
 print(f"edge_attr shape: {edge_attr.shape}")
 print(f"edge_index shape: {pipe_edge_index.shape}")
@@ -209,29 +185,20 @@ print(f"edge_index max index: {pipe_edge_index.max().item()}")
 print(f"edge_node_features shape: {edge_node_features.shape}")
 print(f"label shape: {edge_attr.shape}")
 
-# Create a single data object for all pipes
-data = Data(
-    x=edge_attr,
-    edge_index=pipe_edge_index,
-    edge_attr=edge_node_features,
-    y=torch.tensor(np.array(roughness_label).reshape(-1, 1), dtype=torch.float)
-)
-
 # Split data into training and validation sets
 train_mask = torch.zeros(len(pipes), dtype=torch.bool)
 train_indices = np.random.choice(len(pipes), int(0.7 * len(pipes)), replace=False)
 train_mask[train_indices] = True
 val_mask = ~train_mask
-val_indices = np.setdiff1d(np.arange(len(pipes)), train_indices)
 
-# --- Feature Normalization ---
+# Feature Normalization
 scaler_feat = StandardScaler()
 edge_attr_np = np.array(edge_attrs)
 scaler_feat.fit(edge_attr_np[train_indices])  # Fit only on training data
 edge_attr_norm = scaler_feat.transform(edge_attr_np)
 edge_attr = torch.tensor(edge_attr_norm, dtype=torch.float)
 
-# --- Label Normalization ---
+# Label Normalization
 scaler_label = StandardScaler()
 label_np = np.array(roughness_label).reshape(-1, 1)
 scaler_label.fit(label_np[train_indices])  # Fit only on training data
@@ -242,7 +209,17 @@ label = torch.tensor(label_norm, dtype=torch.float)
 src_feats = node_features[src_nodes]
 dst_feats = node_features[dst_nodes]
 edge_node_features = torch.cat([src_feats, dst_feats], dim=1)
+
+# Create a single data object for all pipes
+data = Data(
+    x=edge_attr,
+    edge_index=pipe_edge_index,
+    edge_attr=edge_node_features,
+    y=torch.tensor(np.array(label).reshape(-1, 1), dtype=torch.float)
+)
+
 '''''
+# NNConv
 class RoughnessNNConvGNN(nn.Module):
     def __init__(self, in_channels, edge_in_channels, hidden_channels):
         super().__init__()
@@ -265,13 +242,12 @@ class RoughnessNNConvGNN(nn.Module):
         x = self.fc(x)
         return x
 '''''
-# Try the simplest neural network later
+
 class RoughnessConvGNN(nn.Module):
     def __init__(self, in_channels, hidden_channels1, hidden_channels2):
         super().__init__()
         self.conv1 = GCNConv(in_channels, hidden_channels1)
         self.conv2 = GCNConv(hidden_channels1, hidden_channels2)
-        # self.bn1 = nn.BatchNorm1d(hidden_channels)
         self.dropout = nn.Dropout(0.3)
         self.fc = nn.Linear(hidden_channels2, 1)
 
@@ -282,27 +258,26 @@ class RoughnessConvGNN(nn.Module):
         x = self.conv2(x, edge_index)
         x = F.relu(x)
         x = self.dropout(x)
-        # x = self.bn1(x)
         x = self.fc(x)
         return x
 
-
-# Initialize NNConv model and training
+## NNConv model
 # model = RoughnessNNConvGNN(
 #     in_channels=edge_attr.shape[1],
 #     edge_in_channels=edge_node_features.shape[1],
 #     hidden_channels=64
 # )
+
 model = RoughnessConvGNN(in_channels=edge_attr.shape[1], hidden_channels1=64, hidden_channels2=128)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-5)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10, verbose=True)
 criterion = nn.MSELoss()
 
-# Training loop for NNConv model
-best_val_loss = float('inf')
-patience = 20
-# patience_counter = 0
-best_model_state = None
+## Training loop for NNConv model
+# best_val_loss = float('inf')
+# patience = 20
+# # patience_counter = 0
+# best_model_state = None
 
 for epoch in range(1000):
     model.train()
@@ -366,7 +341,8 @@ plt.scatter(val_true_denorm, val_pred_denorm, alpha=0.5)
 plt.plot([val_true_denorm.min(), val_true_denorm.max()], [val_true_denorm.min(), val_true_denorm.max()], 'r--', label='Perfect Prediction')
 plt.xlabel("Actual Roughness")
 plt.ylabel("Predicted Roughness")
-plt.title("NNConv GNN: Predicted vs Actual Pipe Roughness (Validation Set)")
+# plt.title("NNConv GNN: Predicted vs Actual Pipe Roughness (Validation Set)")
+plt.title("GCNConv: Predicted vs Actual Pipe Roughness (Validation Set)")
 plt.grid(True)
 plt.legend()
 plt.show()
@@ -379,4 +355,180 @@ plt.ylabel("Frequency")
 plt.title("Distribution of Prediction Errors (NNConv)")
 plt.grid(True)
 plt.show()
+
+
+
+
 # %%
+# Pipe Roughness Prediction using MLP
+
+import wntr
+import torch
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+from torch.utils.data import TensorDataset, DataLoader
+import torch.nn as nn
+import torch.nn.functional as F
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+
+
+inp_file = "/Users/sukeluo/Documents/UB/Courses/25Spring/CIE500/CIE500_LL/week7/Net3.inp"
+wn = wntr.network.WaterNetworkModel(inp_file)
+wn.options.time.report_timestep = 3600*2
+wn.options.time.duration = 3600*24*3
+
+sim = wntr.sim.WNTRSimulator(wn)
+results = sim.run_sim()
+
+# Extract node pressure, flowrate
+pressure = results.node["pressure"]
+Q_flowrate = results.link["flowrate"]
+
+# Extract nodes and edges
+nodes = list(wn.node_name_list)
+node_mapping = {name: idx for idx, name in enumerate(nodes)}
+inv_node_mapping = {idx: name for name, idx in node_mapping.items()}
+
+# Filter to only include pipes (exclude pumps, valves, etc.)
+pipes = [name for name, link in wn.links() if link.link_type == 'Pipe']
+pipe_mapping = {name: idx for idx, name in enumerate(pipes)}
+inv_pipe_mapping = {idx: name for name, idx in pipe_mapping.items()}
+
+print(f"Total links in network: {len(wn.link_name_list)}")
+print(f"Number of pipes (excluding pumps/valves): {len(pipes)}")
+
+# First collect all roughness values
+roughness_label = []
+for idx, (link_name, link) in enumerate(wn.links()):
+    if link.link_type == 'Pipe':
+        roughness_label.append(link.roughness)
+
+print("\nOriginal roughness values:")
+print(f"First 5 values: {roughness_label[:5]}")
+print(f"Last 5 values: {roughness_label[-5:]}")
+
+# Now modify the roughness values for known pipes
+
+# Modify roughness values for known pipes to create more variance
+modified_roughness = roughness_label.copy()
+for idx, coeff in enumerate(modified_roughness):
+    # 90% chance to modify
+    r = np.random.random()
+    if r < 0.9:
+        # Create ranges with more variance but still somewhat realistic
+        if r < 0.3:  # 30% chance to be lower range
+            modified_roughness[idx] = np.random.uniform(100, 130)  # Lower range
+        elif r < 0.7:  # 40% chance to be middle range
+            modified_roughness[idx] = np.random.uniform(130, 150)  # Middle range
+        else:  # 30% chance to be higher range
+            modified_roughness[idx] = np.random.uniform(150, 180)  # Higher range
+
+# Use modified roughness for known pipes
+# roughness_label = modified_roughness
+
+edges = []
+edge_attrs = []
+# Loop through each link in the model
+for idx, (link_name, link) in enumerate(wn.links()):
+    if link.link_type == 'Pipe':
+        src_idx = node_mapping[link.start_node_name]
+        dst_idx = node_mapping[link.end_node_name]
+        length = link.length
+        diameter = link.diameter
+        roughness = roughness_label[idx]  # Use the modified roughness
+        flowrate = abs(Q_flowrate[link_name].mean())
+        
+        if flowrate > 0 and diameter > 0 and roughness > 0:
+            # Hazen-Williams for head loss calculation
+            headloss = (10.67 * length * flowrate**1.852) / (roughness**1.852 * diameter**4.87)
+        else:
+            headloss = 0.0
+        # Node attributes
+        start_node = link.start_node
+        end_node = link.end_node
+
+        elev_start = start_node.elevation if hasattr(start_node, 'elevation') else 0.0
+        elev_end = end_node.elevation if hasattr(end_node, 'elevation') else 0.0
+        elev_diff = elev_end - elev_start
+
+        # Demand (only valid for junctions)
+        if start_node.node_type == 'Junction' and len(start_node.demand_timeseries_list) > 0:
+            demand_start = start_node.demand_timeseries_list[0].base_value
+        else:
+            demand_start = 0.0
+
+        if end_node.node_type == 'Junction' and len(end_node.demand_timeseries_list) > 0:
+            demand_end = end_node.demand_timeseries_list[0].base_value
+        else:
+            demand_end = 0.0
+
+        demand_sum = demand_start + demand_end
+
+        edge_attrs.append([
+            length, diameter, flowrate, headloss,
+            elev_start, elev_end, elev_diff,
+            demand_start, demand_end, demand_sum
+        ])
+
+edge_attr = torch.tensor(np.array(edge_attrs), dtype=torch.float)
+y = torch.tensor(modified_roughness, dtype=torch.float).view(-1, 1)
+
+# Scale features
+scaler = StandardScaler()
+X_scaled = torch.tensor(scaler.fit_transform(edge_attr), dtype=torch.float)
+
+dataset = TensorDataset(X_scaled, y)
+dataloader = DataLoader(dataset, batch_size=16, shuffle=True)
+
+class PipeMLP(nn.Module):
+    def __init__(self, in_dim):
+        super(PipeMLP, self).__init__()
+        self.fc1 = nn.Linear(in_dim, 64)
+        self.fc2 = nn.Linear(64, 32)
+        self.fc3 = nn.Linear(32, 1)
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        return self.fc3(x)
+
+model = PipeMLP(X_scaled.shape[1])
+optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+loss_fn = nn.MSELoss()
+
+for epoch in range(100):
+    model.train()
+    running_loss = 0.0
+    for batch_x, batch_y in dataloader:
+        optimizer.zero_grad()
+        output = model(batch_x)
+        loss = loss_fn(output, batch_y)
+        loss.backward()
+        optimizer.step()
+        running_loss += loss.item()
+    if epoch % 10 == 0:
+        print(f"Epoch {epoch}, Loss: {running_loss:.4f}")
+
+model.eval()
+with torch.no_grad():
+    predictions = model(X_scaled).numpy()
+    actuals = y.numpy()
+    r2 = r2_score(actuals, predictions)
+    mae = mean_absolute_error(actuals, predictions)
+    rmse = np.sqrt(mean_squared_error(actuals, predictions))
+    print(f"\nEvaluation Metrics for Validation Set:")
+    print(f"R² Score: {r2:.4f}")
+    print(f"MAE: {mae:.4f}")
+    print(f"RMSE: {rmse:.4f}")
+
+plt.figure(figsize=(8, 6))
+plt.scatter(actuals, predictions, edgecolor='black', alpha=0.7)
+plt.plot([actuals.min(), actuals.max()], [actuals.min(), actuals.max()], 'r--', label="Perfect Prediction")
+plt.xlabel("Actual Roughness")
+plt.ylabel("Predicted Roughness")
+plt.title("MLP: Predicted vs Actual Pipe Roughness")
+plt.legend()
+plt.grid(True)
+plt.show()
